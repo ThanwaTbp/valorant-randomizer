@@ -3,7 +3,7 @@
 import { useEffect, useRef } from 'react'
 import Image from 'next/image'
 import { motion, AnimatePresence } from 'framer-motion'
-import { useAppStore } from '@/lib/store'
+import { useAppStore, SOLO_PLAYER_CAP } from '@/lib/store'
 import { useRoomChannel } from '@/lib/useRoomChannel'
 import {
   filterByBans,
@@ -73,8 +73,13 @@ export function SoloRollGrid() {
     claimedUuids.filter((u) => u !== myResult?.agentUuid),
   )
 
-  const canRoll = playerId && !myResult && myPool.length > 0
-  const noPool = playerId && !myResult && myPool.length === 0
+  // เช็คว่าตัวเองอยู่ใน 5 คนแรก (ไม่งั้นเป็น spectator)
+  const myIndex = displayPlayers.findIndex((p) => p.id === playerId)
+  const isSpectator = myIndex >= SOLO_PLAYER_CAP
+
+  const canRoll =
+    playerId && !myResult && myPool.length > 0 && !isSpectator
+  const noPool = playerId && !myResult && myPool.length === 0 && !isSpectator
 
   async function handleRoll() {
     if (!canRoll || !playerId) return
@@ -138,6 +143,14 @@ export function SoloRollGrid() {
           </div>
         )}
 
+        {isSpectator && (
+          <div className='flex items-start gap-3 p-3 bg-val-accent/40 border border-val-light/20'>
+            <AlertTriangle className='w-5 h-5 text-val-light/60 flex-shrink-0 mt-0.5' />
+            <div className='text-sm text-val-light/70'>
+              ห้องเต็ม ({SOLO_PLAYER_CAP} คน) — คุณดูเฉยๆ ไม่ได้สุ่ม
+            </div>
+          </div>
+        )}
         <div className='flex gap-3'>
           <Button
             size='lg'

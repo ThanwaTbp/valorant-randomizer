@@ -44,7 +44,7 @@ export interface Player {
   joinedAt: number
 }
 
-// payload Team Roll — ของเดิม + roundId
+// payload Team Roll — ของเดิม + roundId + snapshot ชื่อ player
 export interface RandomizePayload {
   roundId: string
   seed: number
@@ -52,6 +52,8 @@ export interface RandomizePayload {
   agentUuids: string[]
   fullTeam: boolean
   startedAt: number
+  // snapshot ชื่อ player ตอนกดสุ่ม — กัน mapping เพี้ยนถ้ามีคนเข้า/ออกระหว่าง rolling
+  playerNames: string[]
 }
 
 // payload Solo Roll — broadcast ตอนคน 1 คนกดสุ่มสำเร็จ (claim ตัวละคร)

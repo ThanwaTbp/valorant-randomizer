@@ -8,17 +8,16 @@ import {
   pickAgents,
   newSeed,
   filterByBans,
+  shouldUseFullTeam,
   canMakeFullTeam,
 } from '@/lib/randomizer'
-import type { Agent, RandomizePayload } from '@/lib/types'
+import type { RandomizePayload } from '@/lib/types'
 import { Button } from '@/components/ui/Button'
-import { Toggle } from '@/components/ui/Input'
 import { AgentCard, AgentCardSkeleton } from '@/components/AgentCard'
 import { SlotReel } from '@/components/SlotReel'
 import { Dice5, RotateCcw, AlertTriangle } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { playSpinSfx, playRevealSfx } from '@/lib/audio'
-import { useScrollTo } from '@/lib/useScrollTo'
 
 export function Randomizer() {
   const roomCode = useAppStore((s) => s.roomCode)
@@ -27,20 +26,15 @@ export function Randomizer() {
   const agents = useAppStore((s) => s.agents)
   const bannedUuids = useAppStore((s) => s.bannedUuids)
   const count = useAppStore((s) => s.count)
-  const fullTeam = useAppStore((s) => s.fullTeam)
   const phase = useAppStore((s) => s.phase)
   const result = useAppStore((s) => s.result)
   const lastPayload = useAppStore((s) => s.lastPayload)
 
   const setCount = useAppStore((s) => s.setCount)
-  const setFullTeam = useAppStore((s) => s.setFullTeam)
   const applyRandomize = useAppStore((s) => s.applyRandomize)
   const reset = useAppStore((s) => s.reset)
 
   const { broadcastRandomize } = useRoomChannel(roomCode)
-
-  // ref สำหรับ scroll ไปที่ display area ตอน rolling
-  const { ref: displayRef, scrollTo } = useScrollTo()
 
   // เล่น reveal SFX ตอน phase เปลี่ยน rolling → done
   const prevPhase = useRef(phase)
@@ -57,6 +51,12 @@ export function Randomizer() {
     [agents, bannedUuids],
   )
 
+  // auto detect ว่าจะ fullTeam ได้ไหม (N=4 หรือ 5 + pool ครบ 4 role)
+  const willUseFullTeam = useMemo(
+    () => shouldUseFullTeam(pool, count),
+    [pool, count],
+  )
+
   const validation = useMemo(() => {
     if (pool.length < count) {
       return {
@@ -64,29 +64,36 @@ export function Randomizer() {
         reason: `เหลือ agent แค่ ${pool.length} ตัว ไม่พอสุ่ม ${count} ตัว`,
       }
     }
-    if (fullTeam && count === 5) {
+    // ถ้า count = 4 หรือ 5 → เช็คว่ามี 4 role ครบไหม (auto fullTeam)
+    if (count >= 4) {
       const ft = canMakeFullTeam(pool)
-      if (!ft.ok) {
+      if (!ft.ok && ft.missingRoles.length > 0) {
         return {
           ok: false,
-          reason: `โหมดครบทีมต้องมีครบ 4 role · ขาด: ${ft.missingRoles.join(', ')}`,
+          reason: `โหมดครบทีม (auto) ขาด: ${ft.missingRoles.join(', ')}`,
         }
       }
     }
     return { ok: true, reason: '' }
-  }, [pool, count, fullTeam])
+  }, [pool, count])
 
   useEffect(() => {
     if (phase === 'done') reset()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [count, fullTeam, bannedUuids])
+  }, [count, bannedUuids])
 
   async function handleRandomize() {
     if (!validation.ok || pool.length === 0 || phase === 'rolling') return
 
     const seed = newSeed()
-    const useFullTeam = fullTeam && count === 5
-    const picked = pickAgents(pool, count, seed, useFullTeam)
+    const picked = pickAgents(pool, count, seed)
+
+    // SNAPSHOT players ตอนนี้ — กัน mapping เพี้ยนถ้ามีคนเข้า/ออกระหว่าง rolling
+    // ถ้าไม่อยู่ใน room → ใช้ชื่อตัวเอง
+    const snapshotNames =
+      players.length > 0
+        ? players.slice(0, count).map((p) => p.name)
+        : [playerName || 'You']
 
     const payload: RandomizePayload = {
       roundId:
@@ -96,15 +103,14 @@ export function Randomizer() {
       seed,
       count,
       agentUuids: picked.map((a) => a.uuid),
-      fullTeam: useFullTeam,
+      fullTeam: willUseFullTeam,
       startedAt: Date.now(),
+      playerNames: snapshotNames,
     }
 
     const accepted = applyRandomize(payload, true)
     if (accepted) {
-      // SFX + scroll ทันที
       playSpinSfx()
-      scrollTo()
     }
     if (roomCode && accepted) {
       await broadcastRandomize(payload)
@@ -114,15 +120,14 @@ export function Randomizer() {
   const displayUuids = lastPayload?.agentUuids ?? []
   const displayCount = lastPayload?.count ?? count
 
-  // mapping ตัว→ชื่อ ตาม index ใน players (เรียง joinedAt asc แล้วใน store)
-  // ถ้าไม่อยู่ใน room → ใช้ชื่อตัวเองเป็นคนแรก
-  const playerNamesForMapping: string[] = useMemo(() => {
-    if (players.length > 0) return players.map((p) => p.name)
-    return [playerName || 'You']
-  }, [players, playerName])
-
+  // ใช้ snapshot จาก payload — กันเพี้ยน
   function nameFor(index: number): string | null {
-    return playerNamesForMapping[index] ?? null
+    if (lastPayload?.playerNames) {
+      return lastPayload.playerNames[index] ?? null
+    }
+    // fallback ตอน idle (ยังไม่มี payload)
+    if (players.length > 0) return players[index]?.name ?? null
+    return index === 0 ? playerName || 'You' : null
   }
 
   const gridCols = (n: number) => {
@@ -159,18 +164,10 @@ export function Randomizer() {
               </button>
             ))}
           </div>
-        </div>
-
-        <div>
-          <Toggle
-            checked={fullTeam}
-            onChange={setFullTeam}
-            label='ครบทีม (4 ROLE + 1 FLEX)'
-            disabled={count !== 5 || phase === 'rolling'}
-          />
-          {count !== 5 && (
-            <p className='text-xs text-val-light/40 mt-2'>
-              * โหมดครบทีมใช้ได้เมื่อสุ่ม 5 ตัวเท่านั้น
+          {/* แสดง info auto fullTeam */}
+          {count >= 4 && willUseFullTeam && (
+            <p className='text-xs text-val-mint mt-2 font-bebas tracking-widest'>
+              ✓ AUTO: ครบ 4 ROLE {count === 5 && '+ FLEX'}
             </p>
           )}
         </div>
@@ -226,8 +223,8 @@ export function Randomizer() {
         </div>
       </div>
 
-      {/* DISPLAY */}
-      <div ref={displayRef} className='min-h-[420px] scroll-mt-4'>
+      {/* DISPLAY (idle + done — rolling จะแสดงใน RollModal) */}
+      <div className='min-h-[420px]'>
         <AnimatePresence mode='wait'>
           {phase === 'idle' && (
             <motion.div
@@ -247,27 +244,19 @@ export function Randomizer() {
           )}
 
           {phase === 'rolling' && lastPayload && (
+            // Modal overlay จะ render reels — ที่นี่แสดง placeholder
             <motion.div
-              key={'rolling-' + lastPayload.roundId}
+              key={'rolling-placeholder-' + lastPayload.roundId}
               initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
+              animate={{ opacity: 0.3 }}
               className={cn('grid gap-4', gridCols(displayCount))}
             >
-              {displayUuids.map((uuid, i) => {
-                const finalAgent = agents.find((a) => a.uuid === uuid)
-                if (!finalAgent) return null
-                return (
-                  <div key={uuid + '-' + lastPayload.roundId} className='space-y-2'>
-                    <PlayerLabel name={nameFor(i)} />
-                    <SlotReel
-                      pool={pool}
-                      finalAgent={finalAgent}
-                      delay={i * 200}
-                      duration={1500 + i * 100}
-                    />
-                  </div>
-                )
-              })}
+              {displayUuids.map((uuid, i) => (
+                <div key={uuid + '-' + i} className='space-y-2'>
+                  <PlayerLabel name={nameFor(i)} />
+                  <AgentCardSkeleton index={i} />
+                </div>
+              ))}
             </motion.div>
           )}
 
@@ -292,7 +281,73 @@ export function Randomizer() {
           )}
         </AnimatePresence>
       </div>
+
+      {/* MODAL OVERLAY ตอน rolling */}
+      <RollModal pool={pool} gridCols={gridCols} nameFor={nameFor} />
     </section>
+  )
+}
+
+// modal กลางจอตอน rolling
+function RollModal({
+  pool,
+  gridCols,
+  nameFor,
+}: {
+  pool: { uuid: string }[]
+  gridCols: (n: number) => string
+  nameFor: (i: number) => string | null
+}) {
+  const phase = useAppStore((s) => s.phase)
+  const lastPayload = useAppStore((s) => s.lastPayload)
+  const agents = useAppStore((s) => s.agents)
+
+  return (
+    <AnimatePresence>
+      {phase === 'rolling' && lastPayload && (
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          className='fixed inset-0 z-30 flex items-center justify-center p-4 bg-val-darker/90 backdrop-blur-sm'
+        >
+          <motion.div
+            initial={{ scale: 0.9, opacity: 0 }}
+            animate={{ scale: 1, opacity: 1 }}
+            exit={{ scale: 0.95, opacity: 0 }}
+            className='w-full max-w-5xl space-y-6'
+          >
+            <div className='text-center'>
+              <div className='font-bebas text-3xl tracking-[0.4em] text-val-red animate-pulse'>
+                ROLLING
+              </div>
+              <div className='h-0.5 w-24 bg-val-red mx-auto mt-2' />
+            </div>
+
+            <div className={cn('grid gap-4', gridCols(lastPayload.count))}>
+              {lastPayload.agentUuids.map((uuid, i) => {
+                const finalAgent = agents.find((a) => a.uuid === uuid)
+                if (!finalAgent) return null
+                return (
+                  <div
+                    key={uuid + '-' + lastPayload.roundId}
+                    className='space-y-2'
+                  >
+                    <PlayerLabel name={nameFor(i)} />
+                    <SlotReel
+                      pool={pool as never}
+                      finalAgent={finalAgent}
+                      delay={i * 200}
+                      duration={1500 + i * 100}
+                    />
+                  </div>
+                )
+              })}
+            </div>
+          </motion.div>
+        </motion.div>
+      )}
+    </AnimatePresence>
   )
 }
 

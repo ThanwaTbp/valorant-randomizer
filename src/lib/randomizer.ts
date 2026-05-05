@@ -33,45 +33,56 @@ export function randomAgents(
   return shuffle(agents, rng).slice(0, count)
 }
 
-// สุ่มแบบครบทีม (เฉพาะ count === 5):
-// - เลือก 1 ตัวจากแต่ละ role (Duelist, Initiator, Controller, Sentinel) = 4 ตัว
-// - เลือก flex อีก 1 ตัวจาก agent ที่เหลือ (role อะไรก็ได้)
-export function randomFullTeam(agents: Agent[], seed: number): Agent[] {
+// สุ่มแบบครบทีม (รองรับ count = 4 หรือ 5):
+// - count = 4 → 1 ตัวจากแต่ละ role (Duelist, Initiator, Controller, Sentinel)
+// - count = 5 → 4 role + flex 1 ตัว
+export function randomFullTeam(
+  agents: Agent[],
+  seed: number,
+  count: number,
+): Agent[] {
   const rng = mulberry32(seed)
   const roles: AgentRole[] = ['Duelist', 'Initiator', 'Controller', 'Sentinel']
 
   const picked: Agent[] = []
   const usedUuids = new Set<string>()
 
-  // หยิบ 1 ตัว/role
+  // หยิบ 1 ตัว/role (เสมอ)
   for (const role of roles) {
     const pool = agents.filter((a) => a.role === role && !usedUuids.has(a.uuid))
-    if (pool.length === 0) continue // edge case: ถ้า api ไม่มี role นั้น
+    if (pool.length === 0) continue
     const shuffled = shuffle(pool, rng)
     const choice = shuffled[0]
     picked.push(choice)
     usedUuids.add(choice.uuid)
   }
 
-  // flex 1 ตัวจาก pool ที่เหลือ
-  const remaining = agents.filter((a) => !usedUuids.has(a.uuid))
-  if (remaining.length > 0) {
-    const flex = shuffle(remaining, rng)[0]
-    picked.push(flex)
+  // flex สำหรับ count > 4
+  if (count > 4) {
+    const remaining = agents.filter((a) => !usedUuids.has(a.uuid))
+    if (remaining.length > 0) {
+      const flex = shuffle(remaining, rng)[0]
+      picked.push(flex)
+    }
   }
 
   return picked
 }
 
-// entry point — เลือก strategy ตาม flag fullTeam
+// auto detect ว่าจะใช้ fullTeam ไหม — N=4 หรือ 5 และ pool มี 4 role ครบ
+export function shouldUseFullTeam(agents: Agent[], count: number): boolean {
+  if (count !== 4 && count !== 5) return false
+  return canMakeFullTeam(agents).ok
+}
+
+// entry point — auto detect ว่า fullTeam ได้ไหม
 export function pickAgents(
   agents: Agent[],
   count: number,
   seed: number,
-  fullTeam: boolean,
 ): Agent[] {
-  if (fullTeam && count === 5) {
-    return randomFullTeam(agents, seed)
+  if (shouldUseFullTeam(agents, count)) {
+    return randomFullTeam(agents, seed, count)
   }
   return randomAgents(agents, count, seed)
 }

@@ -9,10 +9,16 @@ import type {
 
 const BAN_STORAGE_KEY = 'valorant-randomizer:bans'
 const PROFILE_STORAGE_KEY = 'valorant-randomizer:profile'
+// session-scoped — รีเฟรชไม่หลุด, ปิด tab = ออก
+const ROOM_SESSION_KEY = 'valorant-randomizer:room'
+const PLAYER_ID_SESSION_KEY = 'valorant-randomizer:player-id'
 
 const ROLLING_DURATION_MS = 2200
 
-// localStorage helpers (client only) — เงียบเมื่อ fail
+// Solo Mode cap จำนวนคนสุ่มได้
+export const SOLO_PLAYER_CAP = 5
+
+// localStorage helpers (persist ข้าม session)
 function lsGet<T>(key: string, fallback: T): T {
   if (typeof window === 'undefined') return fallback
   try {
@@ -30,49 +36,63 @@ function lsSet(key: string, value: unknown): void {
   } catch {}
 }
 
-// ---------------- types ภายใน store ----------------
+// sessionStorage helpers (รีเฟรชไม่หลุด, ปิด tab = หาย)
+function ssGet<T>(key: string, fallback: T): T {
+  if (typeof window === 'undefined') return fallback
+  try {
+    const raw = sessionStorage.getItem(key)
+    if (!raw) return fallback
+    return JSON.parse(raw) as T
+  } catch {
+    return fallback
+  }
+}
+function ssSet(key: string, value: unknown): void {
+  if (typeof window === 'undefined') return
+  try {
+    sessionStorage.setItem(key, JSON.stringify(value))
+  } catch {}
+}
+function ssRemove(key: string): void {
+  if (typeof window === 'undefined') return
+  try {
+    sessionStorage.removeItem(key)
+  } catch {}
+}
 
 export type Phase = 'idle' | 'rolling' | 'done'
 
-// solo roll ของแต่ละคน
 export interface SoloResult {
   playerId: string
   agentUuid: string
   roundId: string
-  // ใช้ track ว่ายัง rolling หรือ done
   done: boolean
 }
 
 interface AppState {
-  // profile (ของตัวเอง)
   playerId: string | null
   playerName: string
 
-  // room
   roomCode: string | null
   isHost: boolean
   memberCount: number
-  // members ทั้งหมดใน room (จาก presence) เรียงตาม joinedAt
   players: Player[]
 
-  // agent pool
   agents: Agent[]
 
-  // settings (host คุม sync)
   mode: GameMode
   count: number
-  fullTeam: boolean
 
-  // ban
   bannedUuids: string[]
 
-  // ผลลัพธ์ Team Roll
   phase: Phase
   result: Agent[]
   lastPayload: RandomizePayload | null
 
-  // ผลลัพธ์ Solo Roll — รวมของทุกคน key by playerId
   soloResults: Record<string, SoloResult>
+
+  // ตอน hydrate เสร็จแล้ว — กัน race ตอน mount
+  hydrated: boolean
 
   // actions
   setProfile: (name: string) => void
@@ -83,7 +103,6 @@ interface AppState {
   setPlayers: (p: Player[]) => void
   setMode: (m: GameMode) => void
   setCount: (n: number) => void
-  setFullTeam: (b: boolean) => void
   setPhase: (p: Phase) => void
   setResult: (r: Agent[]) => void
   setLastPayload: (p: RandomizePayload | null) => void
@@ -100,7 +119,6 @@ interface AppState {
   reset: () => void
 }
 
-// gen playerId ครั้งเดียวต่อ session
 function genPlayerId(): string {
   if (typeof crypto !== 'undefined' && crypto.randomUUID) {
     return crypto.randomUUID()
@@ -121,7 +139,6 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   mode: 'team',
   count: 5,
-  fullTeam: true,
 
   bannedUuids: [],
 
@@ -131,32 +148,59 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   soloResults: {},
 
+  hydrated: false,
+
   setProfile: (name) => {
     const trimmed = name.trim().slice(0, 20)
     let id = get().playerId
     if (!id) id = genPlayerId()
     set({ playerName: trimmed, playerId: id })
     lsSet(PROFILE_STORAGE_KEY, { name: trimmed })
+    ssSet(PLAYER_ID_SESSION_KEY, id)
   },
 
   hydrateProfile: () => {
     const stored = lsGet<{ name?: string }>(PROFILE_STORAGE_KEY, {})
     const name = stored.name ?? ''
-    // gen playerId ใหม่ทุก session (กันชนกันถ้าเปิดหลาย tab)
-    set({ playerName: name, playerId: genPlayerId() })
+    // playerId: ลอง restore จาก session ก่อน — ถ้าไม่มีค่อย gen ใหม่
+    // ทำงี้เพื่อให้รีเฟรชแล้ว Supabase presence จำเราเป็นคนเดิม
+    const sessionId = ssGet<string | null>(PLAYER_ID_SESSION_KEY, null)
+    const playerId = sessionId ?? genPlayerId()
+    if (!sessionId) ssSet(PLAYER_ID_SESSION_KEY, playerId)
+
+    // restore room ถ้ามี (รีเฟรช = กลับเข้า room เดิม)
+    const room = ssGet<{ code: string; isHost: boolean } | null>(
+      ROOM_SESSION_KEY,
+      null,
+    )
+
+    set({
+      playerName: name,
+      playerId,
+      roomCode: room?.code ?? null,
+      isHost: room?.isHost ?? false,
+      hydrated: true,
+    })
   },
 
   setAgents: (a) => set({ agents: a }),
-  setRoom: (code, isHost) => set({ roomCode: code, isHost }),
+
+  setRoom: (code, isHost) => {
+    set({ roomCode: code, isHost })
+    if (code) {
+      ssSet(ROOM_SESSION_KEY, { code, isHost })
+    } else {
+      ssRemove(ROOM_SESSION_KEY)
+    }
+  },
+
   setMemberCount: (n) => set({ memberCount: n }),
   setPlayers: (p) => {
-    // เรียงตาม joinedAt asc — สำหรับ mapping ตัว→ชื่อใน Mode A
     const sorted = [...p].sort((a, b) => a.joinedAt - b.joinedAt)
     set({ players: sorted })
   },
   setMode: (m) => set({ mode: m }),
   setCount: (n) => set({ count: Math.max(1, Math.min(5, n)) }),
-  setFullTeam: (b) => set({ fullTeam: b }),
   setPhase: (p) => set({ phase: p }),
   setResult: (r) => set({ result: r }),
   setLastPayload: (p) => set({ lastPayload: p }),
@@ -184,7 +228,6 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
 
-  // Team Roll — first-write-wins
   applyRandomize: (payload, _isSelf) => {
     const state = get()
     const cur = state.lastPayload
@@ -211,7 +254,6 @@ export const useAppStore = create<AppState>((set, get) => ({
     return true
   },
 
-  // Solo Roll — เพิ่ม/อัพเดท soloResults[playerId]
   applySoloRoll: (payload) => {
     const cur = get().soloResults[payload.playerId]
     if (cur && cur.done) return false
