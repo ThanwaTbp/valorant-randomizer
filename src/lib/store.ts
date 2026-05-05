@@ -15,8 +15,8 @@ const PLAYER_ID_SESSION_KEY = 'valorant-randomizer:player-id'
 
 const ROLLING_DURATION_MS = 2200
 
-// Solo Mode cap จำนวนคนสุ่มได้
-export const SOLO_PLAYER_CAP = 5
+// Room cap — จำกัดจำนวนคนต่อ 1 ห้อง (ทั้ง Team + Solo mode)
+export const ROOM_CAP = 5
 
 // localStorage helpers (persist ข้าม session)
 function lsGet<T>(key: string, fallback: T): T {
@@ -91,6 +91,12 @@ interface AppState {
 
   soloResults: Record<string, SoloResult>
 
+  // ผู้ใช้ปิด overlay หลัง done แล้ว — ใช้ทั้ง Team + Solo mode
+  overlayClosed: boolean
+
+  // flag ว่าพยายามเข้าแล้วเต็ม — แสดง error ใน RoomPanel
+  roomFull: boolean
+
   // ตอน hydrate เสร็จแล้ว — กัน race ตอน mount
   hydrated: boolean
 
@@ -101,6 +107,8 @@ interface AppState {
   setRoom: (code: string | null, isHost: boolean) => void
   setMemberCount: (n: number) => void
   setPlayers: (p: Player[]) => void
+  setRoomFull: (b: boolean) => void
+  setOverlayClosed: (b: boolean) => void
   setMode: (m: GameMode) => void
   setCount: (n: number) => void
   setPhase: (p: Phase) => void
@@ -148,6 +156,8 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   soloResults: {},
 
+  overlayClosed: false,
+  roomFull: false,
   hydrated: false,
 
   setProfile: (name) => {
@@ -199,6 +209,8 @@ export const useAppStore = create<AppState>((set, get) => ({
     const sorted = [...p].sort((a, b) => a.joinedAt - b.joinedAt)
     set({ players: sorted })
   },
+  setRoomFull: (b) => set({ roomFull: b }),
+  setOverlayClosed: (b) => set({ overlayClosed: b }),
   setMode: (m) => set({ mode: m }),
   setCount: (n) => set({ count: Math.max(1, Math.min(5, n)) }),
   setPhase: (p) => set({ phase: p }),
@@ -242,7 +254,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       .map((u) => map.get(u))
       .filter((a): a is Agent => a !== undefined)
 
-    set({ lastPayload: payload, phase: 'rolling' })
+    set({ lastPayload: payload, phase: 'rolling', overlayClosed: false })
 
     setTimeout(() => {
       const after = get()
@@ -260,6 +272,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (cur && cur.roundId === payload.roundId) return false
 
     set((s) => ({
+      overlayClosed: false,
       soloResults: {
         ...s.soloResults,
         [payload.playerId]: {
@@ -294,5 +307,6 @@ export const useAppStore = create<AppState>((set, get) => ({
       result: [],
       lastPayload: null,
       soloResults: {},
+      overlayClosed: false,
     }),
 }))

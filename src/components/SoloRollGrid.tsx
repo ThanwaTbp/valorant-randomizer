@@ -3,7 +3,7 @@
 import { useEffect, useRef } from 'react'
 import Image from 'next/image'
 import { motion, AnimatePresence } from 'framer-motion'
-import { useAppStore, SOLO_PLAYER_CAP } from '@/lib/store'
+import { useAppStore } from '@/lib/store'
 import { useRoomChannel } from '@/lib/useRoomChannel'
 import {
   filterByBans,
@@ -14,7 +14,7 @@ import {
 import type { Agent, SoloRollPayload } from '@/lib/types'
 import { Button } from '@/components/ui/Button'
 import { SlotReel } from '@/components/SlotReel'
-import { Dice5, RotateCcw, AlertTriangle } from 'lucide-react'
+import { Dice5, RotateCcw, AlertTriangle, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { playSpinSfx, playRevealSfx } from '@/lib/audio'
 import { useScrollTo } from '@/lib/useScrollTo'
@@ -73,13 +73,8 @@ export function SoloRollGrid() {
     claimedUuids.filter((u) => u !== myResult?.agentUuid),
   )
 
-  // เช็คว่าตัวเองอยู่ใน 5 คนแรก (ไม่งั้นเป็น spectator)
-  const myIndex = displayPlayers.findIndex((p) => p.id === playerId)
-  const isSpectator = myIndex >= SOLO_PLAYER_CAP
-
-  const canRoll =
-    playerId && !myResult && myPool.length > 0 && !isSpectator
-  const noPool = playerId && !myResult && myPool.length === 0 && !isSpectator
+  const canRoll = playerId && !myResult && myPool.length > 0
+  const noPool = playerId && !myResult && myPool.length === 0
 
   async function handleRoll() {
     if (!canRoll || !playerId) return
@@ -143,14 +138,6 @@ export function SoloRollGrid() {
           </div>
         )}
 
-        {isSpectator && (
-          <div className='flex items-start gap-3 p-3 bg-val-accent/40 border border-val-light/20'>
-            <AlertTriangle className='w-5 h-5 text-val-light/60 flex-shrink-0 mt-0.5' />
-            <div className='text-sm text-val-light/70'>
-              ห้องเต็ม ({SOLO_PLAYER_CAP} คน) — คุณดูเฉยๆ ไม่ได้สุ่ม
-            </div>
-          </div>
-        )}
         <div className='flex gap-3'>
           <Button
             size='lg'
@@ -214,7 +201,125 @@ export function SoloRollGrid() {
           })}
         </div>
       )}
+
+      {/* OVERLAY ตอน rolling/done — โชว์เฉพาะของตัวเอง */}
+      <SoloRollModal pool={banFiltered} resultRef={gridRef} />
     </section>
+  )
+}
+
+// modal กลางจอ — แสดงผล solo roll ของตัวเอง
+function SoloRollModal({
+  pool,
+  resultRef,
+}: {
+  pool: Agent[]
+  resultRef: React.RefObject<HTMLDivElement | null>
+}) {
+  const playerId = useAppStore((s) => s.playerId)
+  const playerName = useAppStore((s) => s.playerName)
+  const agents = useAppStore((s) => s.agents)
+  const soloResults = useAppStore((s) => s.soloResults)
+  const overlayClosed = useAppStore((s) => s.overlayClosed)
+  const setOverlayClosed = useAppStore((s) => s.setOverlayClosed)
+
+  const myResult = playerId ? soloResults[playerId] : undefined
+  const myAgent = myResult
+    ? agents.find((a) => a.uuid === myResult.agentUuid)
+    : null
+  const isOpen = !!myResult && !overlayClosed
+  const isDone = myResult?.done ?? false
+
+  function handleClose() {
+    setOverlayClosed(true)
+    requestAnimationFrame(() => {
+      resultRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    })
+  }
+
+  useEffect(() => {
+    if (!isOpen || !isDone) return
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') handleClose()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen, isDone])
+
+  return (
+    <AnimatePresence>
+      {isOpen && myAgent && (
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          className='fixed inset-0 z-30 flex items-center justify-center p-4 bg-val-darker/90 backdrop-blur-sm overflow-y-auto'
+        >
+          <motion.div
+            initial={{ scale: 0.9, opacity: 0 }}
+            animate={{ scale: 1, opacity: 1 }}
+            exit={{ scale: 0.95, opacity: 0 }}
+            className='w-full max-w-md space-y-6 my-auto'
+          >
+            <div className='flex items-center justify-between'>
+              <div className='flex-1' />
+              <div className='text-center flex-1'>
+                <div
+                  className={cn(
+                    'font-bebas text-3xl tracking-[0.4em]',
+                    isDone ? 'text-val-mint' : 'text-val-red animate-pulse',
+                  )}
+                >
+                  {isDone ? 'YOUR PICK' : 'ROLLING'}
+                </div>
+                <div
+                  className={cn(
+                    'h-0.5 w-24 mx-auto mt-2',
+                    isDone ? 'bg-val-mint' : 'bg-val-red',
+                  )}
+                />
+              </div>
+              <div className='flex-1 flex justify-end'>
+                {isDone && (
+                  <button
+                    onClick={handleClose}
+                    className='p-2 bg-val-darker/80 border-2 border-val-light/20 hover:border-val-red hover:text-val-red transition-all clip-val-sm'
+                    aria-label='ปิด'
+                  >
+                    <X className='w-5 h-5' />
+                  </button>
+                )}
+              </div>
+            </div>
+
+            <div className='space-y-2'>
+              <div className='px-3 py-1.5 bg-val-red text-val-light text-center font-bebas tracking-widest text-sm'>
+                {playerName || 'You'}
+              </div>
+              {isDone ? (
+                <SoloDoneCard agent={myAgent} />
+              ) : (
+                <SlotReel
+                  pool={pool}
+                  finalAgent={myAgent}
+                  delay={0}
+                  duration={1800}
+                />
+              )}
+            </div>
+
+            {isDone && (
+              <div className='flex justify-center pt-2'>
+                <Button onClick={handleClose} size='lg'>
+                  <X className='w-5 h-5 mr-2' /> ปิด · ดูผลด้านล่าง
+                </Button>
+              </div>
+            )}
+          </motion.div>
+        </motion.div>
+      )}
+    </AnimatePresence>
   )
 }
 

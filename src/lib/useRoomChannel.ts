@@ -3,7 +3,7 @@
 import { useEffect, useRef } from 'react'
 import type { RealtimeChannel } from '@supabase/supabase-js'
 import { getSupabase } from './supabase'
-import { useAppStore } from './store'
+import { useAppStore, ROOM_CAP } from './store'
 import type {
   BanListPayload,
   ModeSyncPayload,
@@ -109,6 +109,18 @@ export function useRoomChannel(roomCode: string | null) {
 
     channel.subscribe(async (status) => {
       if (status === 'SUBSCRIBED') {
+        // เช็ค room cap ก่อน track — ถ้าเต็มอยู่แล้ว reject
+        const cur = channel.presenceState()
+        const existingCount = Object.keys(cur).length
+        // ถ้าตัวเองอยู่ใน list อยู่แล้ว (rejoin) ไม่นับ
+        const alreadyIn = playerId in cur
+        if (!alreadyIn && existingCount >= ROOM_CAP) {
+          // ห้องเต็ม — เซ็ต flag แล้วออก
+          useAppStore.getState().setRoomFull(true)
+          useAppStore.getState().setRoom(null, false)
+          return
+        }
+        useAppStore.getState().setRoomFull(false)
         await channel.track({
           name: playerName || 'Anonymous',
           joinedAt: Date.now(),

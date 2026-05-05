@@ -16,7 +16,9 @@ export function RoomPanel() {
   const players = useAppStore((s) => s.players)
   const playerName = useAppStore((s) => s.playerName)
   const playerId = useAppStore((s) => s.playerId)
+  const roomFull = useAppStore((s) => s.roomFull)
   const setRoom = useAppStore((s) => s.setRoom)
+  const setRoomFull = useAppStore((s) => s.setRoomFull)
   const setProfile = useAppStore((s) => s.setProfile)
   const reset = useAppStore((s) => s.reset)
 
@@ -47,6 +49,7 @@ export function RoomPanel() {
       setError('CODE ต้อง 6 ตัวอักษร')
       return
     }
+    setRoomFull(false)
     setRoom(code, false)
     setError('')
   }
@@ -230,6 +233,17 @@ export function RoomPanel() {
       {error && (
         <div className='text-sm text-val-red font-bebas tracking-wider px-4'>
           ⚠ {error}
+        </div>
+      )}
+
+      {roomFull && (
+        <div className='p-3 bg-val-red/15 border border-val-red/50 clip-val-sm'>
+          <p className='text-sm text-val-red font-bebas tracking-widest'>
+            ⚠ ห้องเต็มแล้ว (สูงสุด 5 คน)
+          </p>
+          <p className='text-xs text-val-light/60 mt-1'>
+            ลองรอเพื่อนคนหนึ่งออก หรือสร้างห้องใหม่
+          </p>
         </div>
       )}
 

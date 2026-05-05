@@ -15,7 +15,7 @@ import type { RandomizePayload } from '@/lib/types'
 import { Button } from '@/components/ui/Button'
 import { AgentCard, AgentCardSkeleton } from '@/components/AgentCard'
 import { SlotReel } from '@/components/SlotReel'
-import { Dice5, RotateCcw, AlertTriangle } from 'lucide-react'
+import { Dice5, RotateCcw, AlertTriangle, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { playSpinSfx, playRevealSfx } from '@/lib/audio'
 
@@ -35,6 +35,9 @@ export function Randomizer() {
   const reset = useAppStore((s) => s.reset)
 
   const { broadcastRandomize } = useRoomChannel(roomCode)
+
+  // ref สำหรับ scroll ไปที่ section ผลลัพธ์ตอนปิด overlay
+  const resultRef = useRef<HTMLDivElement>(null)
 
   // เล่น reveal SFX ตอน phase เปลี่ยน rolling → done
   const prevPhase = useRef(phase)
@@ -223,8 +226,8 @@ export function Randomizer() {
         </div>
       </div>
 
-      {/* DISPLAY (idle + done — rolling จะแสดงใน RollModal) */}
-      <div className='min-h-[420px]'>
+      {/* DISPLAY (idle + done) */}
+      <div ref={resultRef} className='min-h-[420px] scroll-mt-4'>
         <AnimatePresence mode='wait'>
           {phase === 'idle' && (
             <motion.div
@@ -282,52 +285,122 @@ export function Randomizer() {
         </AnimatePresence>
       </div>
 
-      {/* MODAL OVERLAY ตอน rolling */}
-      <RollModal pool={pool} gridCols={gridCols} nameFor={nameFor} />
+      {/* MODAL OVERLAY ตอน rolling + done (ค้างจนกด X) */}
+      <RollModal pool={pool} gridCols={gridCols} nameFor={nameFor} resultRef={resultRef} />
     </section>
   )
 }
 
-// modal กลางจอตอน rolling
+// modal กลางจอตอน rolling + done — ค้างจนกว่าผู้ใช้จะกดปิด
 function RollModal({
   pool,
   gridCols,
   nameFor,
+  resultRef,
 }: {
   pool: { uuid: string }[]
   gridCols: (n: number) => string
   nameFor: (i: number) => string | null
+  resultRef: React.RefObject<HTMLDivElement | null>
 }) {
   const phase = useAppStore((s) => s.phase)
   const lastPayload = useAppStore((s) => s.lastPayload)
   const agents = useAppStore((s) => s.agents)
+  const result = useAppStore((s) => s.result)
+  const overlayClosed = useAppStore((s) => s.overlayClosed)
+  const setOverlayClosed = useAppStore((s) => s.setOverlayClosed)
+
+  // เปิด overlay เมื่อ rolling/done และยังไม่ปิด
+  const isOpen = (phase === 'rolling' || phase === 'done') && !overlayClosed
+  const isDone = phase === 'done'
+
+  function handleClose() {
+    setOverlayClosed(true)
+    // scroll ไป section ผลลัพธ์หลังปิด
+    requestAnimationFrame(() => {
+      resultRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    })
+  }
+
+  // ปิดด้วย Escape เมื่อ done แล้ว
+  useEffect(() => {
+    if (!isOpen || !isDone) return
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') handleClose()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen, isDone])
 
   return (
     <AnimatePresence>
-      {phase === 'rolling' && lastPayload && (
+      {isOpen && lastPayload && (
         <motion.div
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
-          className='fixed inset-0 z-30 flex items-center justify-center p-4 bg-val-darker/90 backdrop-blur-sm'
+          className='fixed inset-0 z-30 flex items-center justify-center p-4 bg-val-darker/90 backdrop-blur-sm overflow-y-auto'
         >
           <motion.div
             initial={{ scale: 0.9, opacity: 0 }}
             animate={{ scale: 1, opacity: 1 }}
             exit={{ scale: 0.95, opacity: 0 }}
-            className='w-full max-w-5xl space-y-6'
+            className='w-full max-w-5xl space-y-6 my-auto'
           >
-            <div className='text-center'>
-              <div className='font-bebas text-3xl tracking-[0.4em] text-val-red animate-pulse'>
-                ROLLING
+            <div className='flex items-center justify-between'>
+              <div className='flex-1' />
+              <div className='text-center flex-1'>
+                <div
+                  className={cn(
+                    'font-bebas text-3xl tracking-[0.4em]',
+                    isDone ? 'text-val-mint' : 'text-val-red animate-pulse',
+                  )}
+                >
+                  {isDone ? 'RESULT' : 'ROLLING'}
+                </div>
+                <div
+                  className={cn(
+                    'h-0.5 w-24 mx-auto mt-2',
+                    isDone ? 'bg-val-mint' : 'bg-val-red',
+                  )}
+                />
               </div>
-              <div className='h-0.5 w-24 bg-val-red mx-auto mt-2' />
+              <div className='flex-1 flex justify-end'>
+                {/* ปุ่มปิด — แสดงเมื่อ done เท่านั้น */}
+                {isDone && (
+                  <button
+                    onClick={handleClose}
+                    className='p-2 bg-val-darker/80 border-2 border-val-light/20 hover:border-val-red hover:text-val-red transition-all clip-val-sm'
+                    aria-label='ปิด'
+                    title='ปิด (Esc)'
+                  >
+                    <X className='w-5 h-5' />
+                  </button>
+                )}
+              </div>
             </div>
 
             <div className={cn('grid gap-4', gridCols(lastPayload.count))}>
               {lastPayload.agentUuids.map((uuid, i) => {
                 const finalAgent = agents.find((a) => a.uuid === uuid)
                 if (!finalAgent) return null
+
+                // ถ้า done ใช้ result agent (= finalAgent) แสดงเป็น AgentCard
+                // ถ้า rolling ใช้ SlotReel
+                if (isDone && result.length > 0) {
+                  const doneAgent = result[i] ?? finalAgent
+                  return (
+                    <div
+                      key={doneAgent.uuid + '-result'}
+                      className='space-y-2'
+                    >
+                      <PlayerLabel name={nameFor(i)} />
+                      <AgentCard agent={doneAgent} index={i} />
+                    </div>
+                  )
+                }
+
                 return (
                   <div
                     key={uuid + '-' + lastPayload.roundId}
@@ -344,6 +417,18 @@ function RollModal({
                 )
               })}
             </div>
+
+            {/* role summary + ปุ่ม BIG ปิด ตอน done */}
+            {isDone && (
+              <>
+                {lastPayload.fullTeam && <RoleSummary agents={result} />}
+                <div className='flex justify-center pt-4'>
+                  <Button onClick={handleClose} size='lg'>
+                    <X className='w-5 h-5 mr-2' /> ปิด · ดูผลด้านล่าง
+                  </Button>
+                </div>
+              </>
+            )}
           </motion.div>
         </motion.div>
       )}
