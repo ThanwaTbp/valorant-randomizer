@@ -131,7 +131,7 @@ export function AppShell({ initialAgents, fetchError }: AppShellProps) {
           <footer className='pt-12 text-center text-xs text-val-light/30'>
             <p>Agent data: valorant-api.com · Not affiliated with Riot Games</p>
             <p className='mt-1 text-val-light/30'>
-              © {new Date().getFullYear()} Made by <a href="https://github.com/ThanwaTbp" target="_blank" rel="noopener noreferrer" className="underline hover:text-val-red">mikkipastel</a>
+              © {new Date().getFullYear()} Made by <a href="https://github.com/ThanwaTbp" target="_blank" rel="noopener noreferrer" className="underline hover:text-val-red">ThanwaTbp</a>
             </p>
        
           </footer>
