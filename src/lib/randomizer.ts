@@ -42,27 +42,33 @@ export function randomFullTeam(
   count: number,
 ): Agent[] {
   const rng = mulberry32(seed)
-  const roles: AgentRole[] = ['Duelist', 'Initiator', 'Controller', 'Sentinel']
+  // shuffle ลำดับ role ก่อน → position 1 ไม่ล็อคที่ Duelist อีกต่อไป
+  const roles = shuffle<AgentRole>(
+    ['Duelist', 'Initiator', 'Controller', 'Sentinel'],
+    rng,
+  )
 
   const picked: Agent[] = []
   const usedUuids = new Set<string>()
 
-  // หยิบ 1 ตัว/role (เสมอ)
+  // หยิบ 1 ตัว/role ตามลำดับ role ที่ shuffle แล้ว
   for (const role of roles) {
-    const pool = agents.filter((a) => a.role === role && !usedUuids.has(a.uuid))
+    const pool = agents.filter(
+      (a) => a.role === role && !usedUuids.has(a.uuid),
+    )
     if (pool.length === 0) continue
-    const shuffled = shuffle(pool, rng)
-    const choice = shuffled[0]
+    const choice = shuffle(pool, rng)[0]
     picked.push(choice)
     usedUuids.add(choice.uuid)
   }
 
-  // flex สำหรับ count > 4
+  // flex สำหรับ count > 4 — แทรกตำแหน่งไหนก็ได้แบบสุ่ม
   if (count > 4) {
     const remaining = agents.filter((a) => !usedUuids.has(a.uuid))
     if (remaining.length > 0) {
       const flex = shuffle(remaining, rng)[0]
-      picked.push(flex)
+      const insertAt = Math.floor(rng() * (picked.length + 1))
+      picked.splice(insertAt, 0, flex)
     }
   }
 
